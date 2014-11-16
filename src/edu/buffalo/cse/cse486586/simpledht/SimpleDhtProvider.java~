@@ -1,0 +1,506 @@
+package edu.buffalo.cse.cse486586.simpledht;
+
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Formatter;
+import java.util.HashMap;
+
+import android.content.ContentProvider;
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.net.Uri;
+import android.os.AsyncTask;
+import android.telephony.TelephonyManager;
+import android.util.Log;
+
+public class SimpleDhtProvider extends ContentProvider {
+	SimpleDhtProvider provider;
+	//static final String []REOTE_PORT={"11108","11112","11116","11120","11124"};
+    static final int SERVER_PORT = 10000;
+    public static String  myHash;
+    public static String my_port;
+    public static MessageStore messagesdb;
+    public static SQLiteDatabase db;
+    int algo=SQLiteDatabase.CONFLICT_REPLACE;
+    static ArrayList<ChordNodes> nodelist;
+        static String successor;
+        static String predecessor;
+        static String nodeFirst;
+        static String nodeLast;
+        static String nodeLastHash;
+	static String nodeFirstHash;
+	static String predecessorHash;
+	static String successorHash;
+	static Message msg;
+	private boolean isStar;
+	private int ringsize;
+	Uri mUri;
+	
+    
+	@Override
+    public boolean onCreate() {
+    	try {
+		 Setup_Ports();
+		} catch (NoSuchAlgorithmException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+       	messagesdb=new MessageStore(this.getContext());
+        if (messagesdb!=null){
+     	   db=messagesdb.getWritableDatabase();
+     	   Log.v("create","DataStringbase Ncreated");
+     	   
+        }
+        else
+        	return false;
+        Socket_create();
+       Log.e(my_port,"Port");
+       if (!my_port.equals("11108")){
+        send_Hello();        	
+        }
+        else 
+        {
+        	nodelist=new ArrayList<ChordNodes>();
+        	ChordNodes cnodes = null;
+			cnodes = new ChordNodes(my_port,myHash);
+			if (cnodes!=null)
+			nodelist.add(cnodes);
+        	else
+        		System.exit(0);
+        }
+        successor=my_port;
+        predecessor=my_port;
+        nodeFirst=my_port;
+        nodeLast=my_port;
+        nodeLastHash=myHash;
+        nodeFirstHash=myHash;
+        predecessorHash=myHash;
+        successorHash=myHash;
+    
+        Log.e("Initialized","Successfuly");
+        return true;
+    
+    }
+	
+    private void Setup_Ports() throws NoSuchAlgorithmException {
+    	TelephonyManager tel = (TelephonyManager)this.getContext().getSystemService(Context.TELEPHONY_SERVICE);
+    	String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
+        my_port = String.valueOf((Integer.parseInt(portStr) * 2));
+        myHash=genHash(String.valueOf((Integer.parseInt(portStr))));
+               		
+	}
+
+    private void send_Hello(){
+    	Message msg=new Message("Hello",my_port);
+    	msg.setDest_port("11108");
+        if (msg.getDest_port()!=null)new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg, null);
+        
+    }
+    
+    
+	public void SetNeighbors() throws InterruptedException, NoSuchAlgorithmException {
+    String predecessorset="";
+	String successorset="";
+	ringsize=nodelist.size();
+	if (nodelist.size()<=1)return;
+	nodeFirstHash=nodelist.get(0).getHashValue();
+	nodeLastHash=nodelist.get(nodelist.size()-1).getHashValue();
+	nodeFirst=nodelist.get(0).getPort();
+        nodeLast=nodelist.get(nodelist.size()-1).getPort();
+	int i;
+    for (i=0;i<nodelist.size();i++){
+    if (i==0){
+    	predecessorset=nodelist.get(nodelist.size()-1).getPort();
+    	successorset=nodelist.get(i+1).getPort();
+    	
+    	
+    }	
+    else{
+    	if (i==(nodelist.size()-1)){
+    
+    	predecessorset=nodelist.get(i-1).getPort();
+        successorset=nodelist.get(0).getPort();
+        }	 
+    else{
+    	predecessorset=nodelist.get(i-1).getPort();
+    	successorset=nodelist.get(i+1).getPort();
+    }
+    }
+    if (nodelist.get(i).getPort().equals("11108")){
+        predecessor=predecessorset;
+        successor=successorset; 
+    	continue;	
+    }
+    Message msg=new Message("Neighbors",my_port);
+    msg.setSuccessor(successorset);
+    msg.setPredecessor(predecessorset);
+    msg.setDest_port(nodelist.get(i).getPort());
+    msg.setEndNodes(nodelist.get(0).getPort(),nodelist.get(nodelist.size()-1).getPort());
+    msg.setRingSize(nodelist.size());
+    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg, null);
+    Log.e(predecessorset,successorset);
+    }
+    
+    }
+	
+
+   
+   @Override
+    public int delete(Uri uri, String selection, String[] selectionArgs) {
+       if (selection.equals("@"))
+       {
+    	   db.delete("Messages",null, selectionArgs);
+    	   return 0;
+       }
+       if (selection.equals("*"))
+       {
+    	   db.delete("Messages",null, selectionArgs);
+    	   Message msgs=new Message("Delete",my_port);
+		   msgs.setDest_port(successor);
+		   msgs.setKey(selection);
+		   new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg, null);
+		   return 0;
+       }
+       try {
+			if (
+                  
+					( (genHash(selection).compareTo(predecessorHash)>0) && (genHash(selection).compareTo(myHash)<=0) )
+					                 || 
+					( (genHash(selection).compareTo(myHash)>0) && (genHash(selection).compareTo(predecessorHash)>0) )
+					                 ||
+					(predecessor.equals(my_port) )                  
+
+				)
+
+			{  
+			db.delete("Messages","key='"+selection+"'", selectionArgs);
+	        return 0;	
+				   		
+			}
+			else{
+				Log.e("Sending","Successor");
+				Message msgs=new Message("Delete",my_port);
+			    msgs.setDest_port(successor);
+			    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg);
+			    return 0;
+			}
+		} catch (NoSuchAlgorithmException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+       return 0;
+    }
+
+    @Override
+    public String getType(Uri uri) {
+        // TODO Auto-generated method stubNeighbors
+        return null;
+    }
+
+    @Override
+    public Uri insert(Uri uri, ContentValues values) {
+    		Log.e("ey", values.getAsString("key"));
+    		String keys=values.getAsString("key");
+    	try {
+    		if (
+    				
+    				( (genHash(keys).compareTo(predecessorHash)>0) && (genHash(keys).compareTo(myHash)<=0) )
+    		                               || 
+    		        ( (genHash(keys).compareTo(nodeLastHash)>0) && (my_port.equals(nodeFirst)) )
+    		                               ||
+    		        ( (genHash(keys).compareTo(nodeFirstHash)<0) && (my_port.equals(nodeFirst)) )
+    		                               ||
+    		        (predecessor.equals(my_port))	
+    				
+    			)
+         	{
+			    db.insertWithOnConflict("Messages", null, values,algo);
+		     	Log.v("insert", values.toString());
+		    }
+			else{
+			    Message msgs=new Message("Insert",my_port);
+			    msgs.setDest_port(successor);
+			    msgs.setKeyValue(values.getAsString("key"),values.getAsString("value"));
+			    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg);
+			    Log.e("Successor","Sending");
+			}
+		} catch (NoSuchAlgorithmException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+        return null;
+        
+    }
+
+    
+    
+    
+	@Override
+    public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
+            String sortOrder) {
+    		 		
+    	if  (selection.equals("@")){	
+    	Cursor queryCursor=db.query("Messages", null, null, selectionArgs, null, null, null);
+        if(queryCursor==null)Log.v("query","Databases Query");
+        return queryCursor;
+    	}
+    	if  (selection.equals("*")){
+    		isStar=true;
+    		Message msgs;
+    		Cursor queryCursor=db.query("Messages", null,null, selectionArgs, null, null, null);
+            if(queryCursor==null)Log.v("query","Databases Query");
+            msgs=new Message("Query",my_port);
+            msgs.setDest_port(successor);
+            msgs.setKey(selection);
+		        
+		    return queryCursor;
+        	}
+    	
+    	/*try {
+			if (valid(selection))
+
+			{  
+			Cursor queryCursor=db.query("Messages", null, "key='"+selection+"'", selectionArgs, null, null, null);
+	        Log.e(selection, selection);
+			if(queryCursor==null)Log.v("query","Databases Query");
+	        return queryCursor;	
+				   		
+			}
+			else{
+				Log.e("Sending","Successor");
+				Message msgs=new Message("Query",my_port);
+			    msgs.setDest_port(successor);
+			    msgs.setKey(selection);
+			    new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg);
+			    
+			}
+					
+		} catch (NoSuchAlgorithmException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}*/
+		return null;
+    	
+    }
+
+    @Override
+    public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
+        // TODO Auto-generated method stub
+        return 0;
+    }
+
+    private String genHash(String input) throws NoSuchAlgorithmException {
+        MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+        byte[] sha1Hash = sha1.digest(input.getBytes());
+        @SuppressWarnings("resource")
+		Formatter formatter = new Formatter();
+        for (byte b : sha1Hash) {
+            formatter.format("%02x", b);
+        }
+        return formatter.toString();
+    }
+
+      
+    
+ void Socket_create() {
+	 try {
+     	ServerSocket serverSocket = new ServerSocket(SERVER_PORT);
+         new ServerTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, serverSocket);
+     } catch (IOException e) 
+     {
+     	Log.e("Provider", "Can't create a ServerSocket");
+         return;
+     }
+	     
+ }    
+		
+ private class ServerTask extends AsyncTask<ServerSocket, Message, Void> {
+
+     @Override
+     protected Void doInBackground(ServerSocket... sockets) {
+         ServerSocket serverSocket = sockets[0];
+ while(true){
+         Message message = null;
+			try{
+         	Socket clientSocket=serverSocket.accept();
+     	    ObjectInputStream inSocket=new ObjectInputStream(clientSocket.getInputStream());
+             try {
+            	 if (inSocket!=null)
+					message = (Message)inSocket.readObject();
+				} catch (ClassNotFoundException e) {
+					e.printStackTrace();
+				}	    
+            if (message!=null)
+            {
+            	publishProgress(message);	
+            	clientSocket.close();                	
+            }
+             
+                 	
+           }
+         catch (IOException e){Log.e("Chord", "Socket read failed");} 
+			// TODO Auto-generated catch block
+			
+		
+                 	
+         }       
+         
+ 	}
+           
+         
+     protected void onProgressUpdate(Message...messages) {
+    	 if (messages[0].getMessage().equals("Hello")){
+         ChordNodes cnode = null;
+		try {
+			Integer temp=Integer.parseInt(messages[0].getmyPort())/2;
+			if (temp!=null)cnode = new ChordNodes(messages[0].getmyPort(),genHash(temp.toString()));
+			Log.e(my_port,my_port);
+		} catch (NoSuchAlgorithmException e) {
+			// TODO Auto-generated catch block
+			Log.e(my_port,my_port);
+			e.printStackTrace();
+		}
+         nodelist.add(cnode);
+         Collections.sort(nodelist);
+         try {
+			try {
+				SetNeighbors();
+			} catch (NoSuchAlgorithmException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		} catch (InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+         return;
+    	 }
+    	 if (messages[0].getMessage().equals("Neighbors")){
+    		/* if (!messages[0].getPredecessor().equals(predecessor)){
+    			 predecessor=messages[0].getPredecessor();
+    			 SendData();
+    		 }*/
+    		 predecessor=messages[0].getPredecessor();
+    		 successor=messages[0].getSuccessor();
+    		 nodeFirst=messages[0].getNodeFirst();
+    		 nodeLast=messages[0].getNodeLast();
+    		 Integer tmp;
+    		 
+    		 try {
+    			 
+    			tmp=(Integer.parseInt(predecessor)/2);
+    			predecessorHash=genHash(tmp.toString());
+				tmp=(Integer.parseInt(successor)/2);
+				successorHash=genHash(tmp.toString());
+				tmp=(Integer.parseInt(nodeFirst)/2);
+				nodeFirstHash=genHash(tmp.toString());
+				tmp=(Integer.parseInt(nodeLast)/2);
+				nodeLastHash=genHash(tmp.toString());
+				
+			} catch (NoSuchAlgorithmException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+    		 
+    		 Log.e("Neighbors",successor+predecessor);
+    		 return;
+    	 }
+     	if (!messages[0].getmyPort().equals(my_port)){
+     		mUri = buildUri("content", "edu.buffalo.cse.cse486586.simpledht.provider");
+     		Log.e("Msg","Rcvd");
+     		if (messages[0].getMessage().equals("Insert")){
+     			ContentValues cv=new ContentValues();
+     			cv.put("key", messages[0].getKey());
+     			cv.put("value",messages[0].getValue());
+     			insert(mUri, cv);
+       		}
+     		if (messages[0].getMessage().equals("Query")){
+     			return;
+       		}
+     		if (messages[0].getMessage().equals("Delete")){
+     			delete(mUri,messages[0].getKey(),null);
+       		}
+     	}
+     }
+
+     private void Message_Handler(Uri mUri,Message message){
+    	 /*if (message.getMessage().equals("Query")){
+    	 if (!message.getKey().equals("*")){
+    	 if (valid(message.getKey())){
+    		 //Cursor queryCursor=db.query(table, columns, selection, selectionArgs, groupBy, having, orderBy)
+    	 }
+    	 
+    	 if (queryCursor!=null){
+    	 //HashMap<String,String> tableMap=new HashMap<String,String>();
+    	 //for (int){
+    		 
+    	 //}
+    	 
+    	 Message messageresp=new Message("Result",my_port);
+    	 messageresp.setDest_port(message.getmyPort());
+    	 new ClientTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, msg,null);
+    	 }
+    	 }
+    	 }
+    	 if (message.getMessage().equals("Result")){
+    		 
+    	 }
+    	 return;*/ 
+      }		
+	    
+ }
+  private class ClientTask extends AsyncTask<Message, Void, Void> {
+     
+ 	protected  Void doInBackground(Message... msgs) {
+ 	    	 try {
+ 	        	Log.e("Sending",msgs[0].getDest_port());
+ 	        	Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
+ 	        			Integer.parseInt(msgs[0].getDest_port()));
+     	 	            	
+ 	        	ObjectOutputStream outSocket=new ObjectOutputStream(socket.getOutputStream());
+ 	            outSocket.writeObject(msgs[0]);
+ 	            outSocket.flush();
+ 	            outSocket.close();
+ 	            socket.close();
+ 	            	    	 }
+ 	    	    catch (UnknownHostException e) {
+ 		            Log.e("Error", "ClientTask UnknownHostException");
+ 		        } catch (IOException e) {
+ 		            Log.e("Error", "ClientTask socket IOException");
+ 		            
+ 		        }        	
+ 	    return null;
+ 	       
+ 	      }
+
+  }
+
+ private Uri buildUri(String content, String authority) {
+ 	Uri.Builder uriBuilder = new Uri.Builder();
+     uriBuilder.authority(authority);
+     uriBuilder.scheme(content);
+     return uriBuilder.build();
+ 	}
+ 
+
+}
+
+
+
+
+
+
+
+
